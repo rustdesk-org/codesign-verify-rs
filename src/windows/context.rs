@@ -68,8 +68,10 @@ impl Context {
                 cert if cert.is_null() => return Err(Error::LeafCertNotFound),
                 cert => cert as *const CRYPT_PROVIDER_CERT_HDR,
             };
-
-            ret.leaf_cert_ptr = crypt_prov_cert.as_ref().unwrap().pCert as PCCERT_CONTEXT;
+            ret.leaf_cert_ptr = match crypt_prov_cert.as_ref() {
+                None => return Err(Error::LeafCertNotFound),
+                Some(cert) => cert.pCert as PCCERT_CONTEXT,
+            };
         }
 
         Ok(ret)
@@ -77,7 +79,9 @@ impl Context {
 
     fn get_oid_name(&self, issuer: bool, oid: &str) -> Option<String> {
         use std::os::windows::ffi::OsStringExt;
-        let key = std::ffi::CString::new(oid).unwrap();
+        let Ok(key) = std::ffi::CString::new(oid) else {
+            return None;
+        };
         let flag = if issuer { CERT_NAME_ISSUER_FLAG } else { 0 };
 
         // Determine string size:
@@ -109,21 +113,17 @@ impl Context {
             )
         };
 
-        Some(
-            std::ffi::OsString::from_wide(&buf[..len as usize - 1])
-                .into_string()
-                .unwrap(),
-        )
+        std::ffi::OsString::from_wide(&buf[..len as usize - 1])
+            .into_string()
+            .ok()
     }
 
     pub fn serial(&self) -> Option<String> {
         let serial_blob = unsafe {
             self.leaf_cert_ptr
-                .as_ref()
-                .unwrap()
+                .as_ref()?
                 .pCertInfo
-                .as_ref()
-                .unwrap()
+                .as_ref()?
                 .SerialNumber
         };
 
@@ -156,7 +156,12 @@ impl Context {
     }
 
     pub fn sha1_thumbprint(&self) -> String {
-        let cert_ref = unsafe { self.leaf_cert_ptr.as_ref().unwrap() };
+        let cert_ref = unsafe {
+            match self.leaf_cert_ptr.as_ref() {
+                Some(cert) => cert,
+                None => return String::new(), // or handle the error appropriately
+            }
+        };
         let cert_data = unsafe {
             std::slice::from_raw_parts(cert_ref.pbCertEncoded, cert_ref.cbCertEncoded as _)
         };
@@ -170,7 +175,12 @@ impl Context {
     }
 
     pub fn sha256_thumbprint(&self) -> String {
-        let cert_ref = unsafe { self.leaf_cert_ptr.as_ref().unwrap() };
+        let cert_ref = unsafe {
+            match self.leaf_cert_ptr.as_ref() {
+                Some(cert) => cert,
+                None => return String::new(), // or handle the error appropriately
+            }
+        };
         let cert_data = unsafe {
             std::slice::from_raw_parts(cert_ref.pbCertEncoded, cert_ref.cbCertEncoded as _)
         };
