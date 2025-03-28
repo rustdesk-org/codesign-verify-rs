@@ -60,7 +60,7 @@ impl Verifier {
         }
     }
 
-    pub fn verify(&self) -> Result<Context, Error> {
+    pub fn verify(&self, _chain: bool) -> Result<Context, Error> {
         self.check_validity("anchor trusted")?; // This is the most generic verification
         let sec_info = self.get_code_singing_info()?;
         let cert_key = unsafe { CFString::wrap_under_get_rule(kSecCodeInfoCertificates) };
