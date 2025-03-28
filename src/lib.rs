@@ -74,10 +74,10 @@ impl CodeSignVerifier {
     /// ```no_run
     /// use codesign_verify::CodeSignVerifier;
     ///
-    /// CodeSignVerifier::for_file("C:/Windows/explorer.exe").unwrap().verify().unwrap();
+    /// CodeSignVerifier::for_file("C:/Windows/explorer.exe").unwrap().verify(true).unwrap();
     /// ```
-    pub fn verify(self) -> Result<SignatureContext, Error> {
-        self.0.verify().map(SignatureContext)
+    pub fn verify(self, chain: bool) -> Result<SignatureContext, Error> {
+        self.0.verify(chain).map(SignatureContext)
     }
 }
 
@@ -89,7 +89,7 @@ impl SignatureContext {
     /// ```no_run
     /// use codesign_verify::CodeSignVerifier;
     ///
-    /// let ctx = CodeSignVerifier::for_file("C:/Windows/explorer.exe").unwrap().verify().unwrap();
+    /// let ctx = CodeSignVerifier::for_file("C:/Windows/explorer.exe").unwrap().verify(true).unwrap();
     /// assert_eq!(
     ///    ctx.subject_name().organization.as_deref(),
     ///    Some("Microsoft Corporation")
@@ -129,7 +129,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn test_signed() {
         let verifier = super::CodeSignVerifier::for_file("/sbin/ping").unwrap(); // Should always be present on macOS
-        let ctx = verifier.verify().unwrap(); // Should always be signed
+        let ctx = verifier.verify(true).unwrap(); // Should always be signed
 
         // If those values begin to fail, Apple probably changed their certficate
         assert_eq!(
@@ -153,7 +153,7 @@ mod tests {
     fn test_signed() {
         let path = format!("{}/explorer.exe", std::env::var("windir").unwrap()); // Should always be present on Windows
         let verifier = super::CodeSignVerifier::for_file(path).unwrap();
-        let ctx = verifier.verify().unwrap(); // Should always be signed
+        let ctx = verifier.verify(true).unwrap(); // Should always be signed
 
         // If those values begin to fail, Microsoft probably changed their certficate
         assert_eq!(
@@ -182,7 +182,7 @@ mod tests {
         let path = std::env::args().next().unwrap(); // own path, always unsigned and present
 
         assert!(matches!(
-            super::CodeSignVerifier::for_file(path).unwrap().verify(),
+            super::CodeSignVerifier::for_file(path).unwrap().verify(true),
             Err(Error::Unsigned)
         ));
     }

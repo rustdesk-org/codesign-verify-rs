@@ -24,7 +24,7 @@ impl Verifier {
         Self::for_file(path)
     }
 
-    pub fn verify(&self) -> Result<Context, Error> {
+    pub fn verify(&self, chain: bool) -> Result<Context, Error> {
         let mut file_info = WINTRUST_FILE_INFO {
             cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as _,
             pcwszFilePath: self.0.as_ptr(),
@@ -32,6 +32,14 @@ impl Verifier {
             pgKnownSubject: std::ptr::null(),
         };
 
+        let prov_flags = if chain {
+            WTD_DISABLE_MD2_MD4
+                | WTD_REVOCATION_CHECK_END_CERT
+                | WTD_NO_IE4_CHAIN_FLAG
+                | WTD_CACHE_ONLY_URL_RETRIEVAL
+        } else {
+            WTD_SAFER_FLAG
+        };
         let mut data = WINTRUST_DATA {
             cbStruct: std::mem::size_of::<WINTRUST_DATA>() as _,
             pPolicyCallbackData: std::ptr::null_mut(),
@@ -43,10 +51,7 @@ impl Verifier {
             dwStateAction: WTD_STATEACTION_VERIFY,
             hWVTStateData: std::ptr::null_mut(),
             pwszURLReference: std::ptr::null_mut(),
-            dwProvFlags: WTD_DISABLE_MD2_MD4
-                | WTD_REVOCATION_CHECK_END_CERT
-                | WTD_NO_IE4_CHAIN_FLAG
-                | WTD_CACHE_ONLY_URL_RETRIEVAL,
+            dwProvFlags: prov_flags,
             dwUIContext: WTD_UICONTEXT_EXECUTE,
             pSignatureSettings: std::ptr::null_mut(),
         };
