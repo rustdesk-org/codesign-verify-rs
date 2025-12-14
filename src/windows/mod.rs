@@ -7,6 +7,9 @@ use wintrust_sys::*;
 
 pub(crate) struct Verifier(Vec<u16>);
 pub(crate) use context::Context;
+use context::close_state_data;
+
+const CERT_E_UNTRUSTEDROOT: i32 = -2146762487; // 0x800B0109
 
 impl Verifier {
     pub fn for_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, Error> {
@@ -71,7 +74,7 @@ impl Verifier {
             0 => {}
             _ => {
                 let err = std::io::Error::last_os_error();
-                let _ = Context::new(data.hWVTStateData); // So close gets called on the data
+                close_state_data(data.hWVTStateData);
                 if err.raw_os_error() == Some(winapi::shared::winerror::TRUST_E_NOSIGNATURE) {
                     return Err(Error::Unsigned);
                 } else {
@@ -81,6 +84,74 @@ impl Verifier {
         }
 
         Context::new(data.hWVTStateData)
+    }
+
+    pub fn verify_with_trust(&self, chain: bool) -> Result<(Context, bool), Error> {
+        let mut file_info = WINTRUST_FILE_INFO {
+            cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as _,
+            pcwszFilePath: self.0.as_ptr(),
+            hFile: std::ptr::null_mut(),
+            pgKnownSubject: std::ptr::null(),
+        };
+
+        let prov_flags = if chain {
+            WTD_DISABLE_MD2_MD4
+                | WTD_REVOCATION_CHECK_END_CERT
+                | WTD_NO_IE4_CHAIN_FLAG
+                | WTD_CACHE_ONLY_URL_RETRIEVAL
+        } else {
+            WTD_SAFER_FLAG
+        };
+        let mut data = WINTRUST_DATA {
+            cbStruct: std::mem::size_of::<WINTRUST_DATA>() as _,
+            pPolicyCallbackData: std::ptr::null_mut(),
+            pSIPClientData: std::ptr::null_mut(),
+            dwUIChoice: WTD_UI_NONE,
+            fdwRevocationChecks: WTD_REVOKE_NONE,
+            dwUnionChoice: WTD_CHOICE_FILE,
+            u: Default::default(),
+            dwStateAction: WTD_STATEACTION_VERIFY,
+            hWVTStateData: std::ptr::null_mut(),
+            pwszURLReference: std::ptr::null_mut(),
+            dwProvFlags: prov_flags,
+            dwUIContext: WTD_UICONTEXT_EXECUTE,
+            pSignatureSettings: std::ptr::null_mut(),
+        };
+
+        *unsafe { data.u.pFile_mut() } = &mut file_info;
+
+        let mut guid = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+        let status = unsafe {
+            WinVerifyTrust(
+                INVALID_HANDLE_VALUE as _,
+                &mut guid,
+                &mut data as *mut _ as _,
+            )
+        };
+
+        if status == 0 {
+            return Context::new(data.hWVTStateData).map(|ctx| (ctx, true));
+        }
+
+        let err = std::io::Error::last_os_error();
+
+        if err.raw_os_error() == Some(winapi::shared::winerror::TRUST_E_NOSIGNATURE) {
+            close_state_data(data.hWVTStateData);
+            return Err(Error::Unsigned);
+        }
+
+        // Allow retrieving the leaf cert information even when the chain root is not trusted.
+        if err.raw_os_error() == Some(CERT_E_UNTRUSTEDROOT) {
+            match Context::new(data.hWVTStateData) {
+                Ok(ctx) => return Ok((ctx, false)),
+                // Context::new closes state data via Drop on error.
+                Err(_) => return Err(Error::IoError(err)),
+            }
+        }
+
+        close_state_data(data.hWVTStateData);
+        Err(Error::IoError(err))
     }
 }
 

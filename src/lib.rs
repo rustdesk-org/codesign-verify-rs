@@ -18,6 +18,16 @@ pub struct CodeSignVerifier(Verifier);
 ///
 pub struct SignatureContext(Context);
 
+/// Verification result with an explicit trust bit.
+///
+/// This exists because on Windows you may want to extract signature/certificate
+/// information even when the certificate chain terminates in an untrusted root
+/// (e.g. pinned certs, enterprise roots, Azure code signing scenarios).
+pub struct VerificationOutcome {
+    pub context: SignatureContext,
+    pub is_trusted: bool,
+}
+
 ///
 /// Represents an Issuer or Subject name with the following fields:
 ///
@@ -69,6 +79,10 @@ impl CodeSignVerifier {
     /// On macOS the verification uses the Security framework with "anchor trusted" as the requirement.
     /// On Windows the verification uses WinTrust and the `WINTRUST_ACTION_GENERIC_VERIFY_V2` action.
     ///
+    /// Note: this API is strict. If you need to extract certificate information
+    /// even when the chain is not trusted (e.g. CERT_E_UNTRUSTEDROOT), use
+    /// [`verify_with_trust`].
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -78,6 +92,20 @@ impl CodeSignVerifier {
     /// ```
     pub fn verify(self, chain: bool) -> Result<SignatureContext, Error> {
         self.0.verify(chain).map(SignatureContext)
+    }
+
+    /// Verify and always return a `SignatureContext` when possible, even if the
+    /// signing chain is not trusted by the OS.
+    ///
+    /// On Windows, this returns `is_trusted = false` for some failures where the
+    /// OS can still provide leaf certificate details (notably
+    /// CERT_E_UNTRUSTEDROOT).
+    pub fn verify_with_trust(self, chain: bool) -> Result<VerificationOutcome, Error> {
+        let (ctx, is_trusted) = self.0.verify_with_trust(chain)?;
+        Ok(VerificationOutcome {
+            context: SignatureContext(ctx),
+            is_trusted,
+        })
     }
 }
 
@@ -118,6 +146,12 @@ impl SignatureContext {
     /// Retrieve the leaf certificate serial number
     pub fn serial(&self) -> Option<String> {
         self.0.serial()
+    }
+
+    /// On Windows, returns the chain certificates' SPKI SHA256 hashes
+    /// (leaf first). On macOS this currently returns an empty list.
+    pub fn chain_spki_sha256(&self) -> Vec<String> {
+        self.0.chain_spki_sha256()
     }
 }
 

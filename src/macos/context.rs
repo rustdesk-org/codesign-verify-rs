@@ -175,4 +175,8 @@ impl Context {
             .iter()
             .fold(String::new(), |s, byte| s + &format!("{:02x}", byte))
     }
+
+    pub fn chain_spki_sha256(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
