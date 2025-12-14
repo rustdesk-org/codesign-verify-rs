@@ -61,6 +61,10 @@ impl Verifier {
     }
 
     pub fn verify(&self, _chain: bool) -> Result<Context, Error> {
+        self.verify_with_trust(_chain).map(|(ctx, _)| ctx)
+    }
+
+    pub fn verify_with_trust(&self, _chain: bool) -> Result<(Context, bool), Error> {
         self.check_validity("anchor trusted")?; // This is the most generic verification
         let sec_info = self.get_code_singing_info()?;
         let cert_key = unsafe { CFString::wrap_under_get_rule(kSecCodeInfoCertificates) };
@@ -72,7 +76,7 @@ impl Verifier {
         let certs = unsafe { CFArray::<SecCertificate>::wrap_under_get_rule(*certs_ref as _) };
         let leaf_cert = certs.get(0).ok_or(Error::LeafCertNotFound)?;
 
-        Ok(Context::new(leaf_cert.as_concrete_TypeRef()))
+        Ok((Context::new(leaf_cert.as_concrete_TypeRef()), true))
     }
 
     /// Retreive a dictionary of various pieces of information from a code signature.

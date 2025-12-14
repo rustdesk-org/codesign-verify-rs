@@ -9,16 +9,20 @@ struct CRYPT_PROVIDER_CERT_HDR {
 
 pub(crate) struct Context {
     data: HANDLE,
+    signer_ptr: *const std::ffi::c_void,
     leaf_cert_ptr: PCCERT_CONTEXT,
 }
 
 impl Drop for Context {
     fn drop(&mut self) {
-        close_data(self.data);
+        close_state_data(self.data);
     }
 }
 
-fn close_data(handle: HANDLE) {
+/// Maximum certificate chain depth to traverse.
+const MAX_CHAIN_DEPTH: u32 = 32;
+
+pub(super) fn close_state_data(handle: HANDLE) {
     let mut data = WINTRUST_DATA {
         cbStruct: std::mem::size_of::<WINTRUST_DATA>() as _,
         pPolicyCallbackData: std::ptr::null_mut(),
@@ -50,6 +54,7 @@ impl Context {
     pub fn new(state_data: HANDLE) -> Result<Self, Error> {
         let mut ret = Context {
             data: state_data,
+            signer_ptr: std::ptr::null(),
             leaf_cert_ptr: std::ptr::null(),
         };
 
@@ -63,6 +68,7 @@ impl Context {
                 sgnr if sgnr.is_null() => return Err(Error::LeafCertNotFound),
                 sgnr => sgnr,
             };
+            ret.signer_ptr = crypt_prov_sgnr;
 
             let crypt_prov_cert = match WTHelperGetProvCertFromChain(crypt_prov_sgnr, 0) {
                 cert if cert.is_null() => return Err(Error::LeafCertNotFound),
@@ -192,4 +198,84 @@ impl Context {
             .iter()
             .fold(String::new(), |s, byte| s + &format!("{:02x}", byte))
     }
+
+    fn cert_context_at(&self, idx: DWORD) -> Option<PCCERT_CONTEXT> {
+        if self.signer_ptr.is_null() {
+            return None;
+        }
+
+        let crypt_prov_cert = unsafe { WTHelperGetProvCertFromChain(self.signer_ptr, idx) };
+        if crypt_prov_cert.is_null() {
+            return None;
+        }
+
+        let crypt_prov_cert = crypt_prov_cert as *const CRYPT_PROVIDER_CERT_HDR;
+        unsafe { crypt_prov_cert.as_ref().map(|c| c.pCert as PCCERT_CONTEXT) }
+    }
+
+    pub fn chain_spki_sha256(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0..MAX_CHAIN_DEPTH {
+            let Some(cert_ptr) = self.cert_context_at(i) else {
+                break;
+            };
+            let Some(cert_ref) = (unsafe { cert_ptr.as_ref() }) else {
+                break;
+            };
+            let Some(spki_der) = spki_der(cert_ref) else {
+                continue;
+            };
+
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(&spki_der);
+            let hex = hash
+                .as_slice()
+                .iter()
+                .fold(String::new(), |s, byte| s + &format!("{:02x}", byte));
+            out.push(hex);
+        }
+        out
+    }
+}
+
+fn spki_der(cert: &CERT_CONTEXT) -> Option<Vec<u8>> {
+    let cert_info = unsafe { cert.pCertInfo.as_ref()? };
+    let spki: CERT_PUBLIC_KEY_INFO = cert_info.SubjectPublicKeyInfo;
+
+    let encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+    let mut cb: DWORD = 0;
+
+    let ok = unsafe {
+        CryptEncodeObjectEx(
+            encoding,
+            X509_PUBLIC_KEY_INFO,
+            &spki as *const _ as _,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut cb,
+        )
+    };
+    if ok == 0 || cb == 0 {
+        return None;
+    }
+
+    let mut buf = vec![0u8; cb as usize];
+    let ok = unsafe {
+        CryptEncodeObjectEx(
+            encoding,
+            X509_PUBLIC_KEY_INFO,
+            &spki as *const _ as _,
+            0,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr() as _,
+            &mut cb,
+        )
+    };
+    if ok == 0 || cb == 0 {
+        return None;
+    }
+
+    buf.truncate(cb as usize);
+    Some(buf)
 }
